@@ -1,0 +1,34 @@
+"""
+سكربت اختبار سريع - يرسل رسالة تجريبية فوراً بدون أي شروط
+============================================================
+الهدف منه فقط: التأكد إن TELEGRAM_BOT_TOKEN و TELEGRAM_CHAT_ID
+مضبوطين صح ويقدر البوت يوصلك برسالة فعلاً.
+
+بعد ما تتأكد إنه يشتغل، احذف هذا الملف (أو تجاهله) والبوت
+الرئيسي main.py هو اللي يستمر يشتغل بمنطقه الطبيعي.
+"""
+
+import os
+import requests
+
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    print("❌ خطأ: TELEGRAM_BOT_TOKEN أو TELEGRAM_CHAT_ID غير موجودين في متغيرات البيئة.")
+    exit(1)
+
+url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+payload = {
+    "chat_id": TELEGRAM_CHAT_ID,
+    "text": "✅ رسالة اختبار: الاتصال بين GitHub Actions وتيليجرام يشتغل تمام!",
+}
+
+response = requests.post(url, data=payload, timeout=15)
+print("Status code:", response.status_code)
+print("Response:", response.text)
+
+if response.status_code == 200:
+    print("✅ نجح الإرسال - تحقق من تيليجرام الآن.")
+else:
+    print("❌ فشل الإرسال - راجع الرد أعلاه لمعرفة سبب الخطأ.")
