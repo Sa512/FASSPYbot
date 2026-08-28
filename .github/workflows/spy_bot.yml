@@ -2,8 +2,15 @@ name: SPY Bot Scheduler
 
 on:
   schedule:
+    # يشتغل كل 5 دقائق (بتوقيت UTC) على مدار الساعة، 24/7 بدون توقف —
+    # مناسب للكريبتو لأنه يتداول طوال أيام الأسبوع بدون إغلاق.
+    # السكربت نفسه (main.py) يرسل ملخص يومي مرة عند منتصف الليل UTC،
+    # وبعدها يفحص إشارات تداول في باقي التشغيلات.
     - cron: "*/5 * * * *"
-  workflow_dispatch: {}
+  workflow_dispatch: {}   # يسمح لك بتشغيله يدوياً من تبويب Actions للاختبار
+
+env:
+  CRYPTO_SYMBOL: "BTC-USD"   # غيّرها لأي عملة ثانية مثل ETH-USD أو SOL-USD
 
 jobs:
   run-bot:
