@@ -19,8 +19,6 @@ import pandas as pd
 import pytz
 import requests
 import yfinance as yf
-from apscheduler.schedulers.blocking import BlockingScheduler
-from apscheduler.triggers.cron import CronTrigger
 
 # ============================ الإعدادات ============================
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "PUT_YOUR_TOKEN_HERE")
@@ -43,8 +41,6 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 log = logging.getLogger("spy_bot")
-
-_last_signal_time = None  # لتتبع آخر إشارة أُرسلت (لمنع التكرار)
 
 
 # ============================ إرسال تيليجرام ============================
@@ -291,16 +287,11 @@ def job_market_close():
 
 
 def job_check_signals():
-    global _last_signal_time
-    now_ny = datetime.now(NY_TZ)
-    # يعمل فقط خلال ساعات التداول (9:30 - 16:00 بتوقيت نيويورك) ومن الاثنين للجمعة
-    if now_ny.weekday() >= 5:
-        return
-    market_open = now_ny.replace(hour=9, minute=30, second=0, microsecond=0)
-    market_close = now_ny.replace(hour=16, minute=0, second=0, microsecond=0)
-    if not (market_open <= now_ny <= market_close):
-        return
-
+    """
+    يفحص آخر شمعة مكتملة فقط. بما إن كل تشغيلة (run) تجيب بيانات جديدة
+    وتفحص آخر شمعة فقط، فالتكرار غير وارد بشكل طبيعي: شرط التقاطع (crossover)
+    يتحقق فقط في الشمعة اللي حصل فيها التقاطع، وبعدها ما يتكرر تلقائياً.
+    """
     try:
         intraday = get_intraday_data()
         signal = generate_live_signal(intraday)
@@ -308,36 +299,40 @@ def job_check_signals():
             log.info("لا توجد إشارة جديدة حالياً.")
             return
 
-        if _last_signal_time is not None and (now_ny - _last_signal_time) < timedelta(minutes=MIN_MINUTES_BETWEEN_SIGNALS):
-            log.info("تم تجاهل الإشارة لتجنب التكرار السريع.")
-            return
-
         backtest = backtest_strategy(intraday)
         msg = format_signal_message(signal, backtest)
         send_telegram_message(msg)
-        _last_signal_time = now_ny
     except Exception as e:
         log.error(f"خطأ في فحص الإشارات: {e}")
 
 
-# ============================ التشغيل الرئيسي ============================
+# ============================ التشغيل الرئيسي (تشغيلة واحدة) ============================
 def main():
-    log.info("بدء تشغيل بوت SPY...")
-    send_telegram_message(f"✅ بوت {SYMBOL} بدأ التشغيل وجاهز لإرسال التنبيهات.")
+    """
+    هذا السكربت مصمم ليشتغل 'تشغيلة واحدة' في كل مرة (run once) — يناسب
+    GitHub Actions اللي يستدعيه كل 5 دقائق عبر cron بدل ما يفضل شغال باستمرار.
+    """
+    now_ny = datetime.now(NY_TZ)
+    log.info(f"وقت التشغيل الحالي بنيويورك: {now_ny}")
 
-    scheduler = BlockingScheduler(timezone=NY_TZ)
+    # عطلة نهاية الأسبوع: لا شي
+    if now_ny.weekday() >= 5:
+        log.info("عطلة نهاية الأسبوع - لا يوجد تداول.")
+        return
 
-    # رسالة افتتاح السوق الساعة 9:30 صباحاً بتوقيت نيويورك (أيام الأسبوع)
-    scheduler.add_job(job_market_open, CronTrigger(day_of_week="mon-fri", hour=9, minute=30))
+    market_open = now_ny.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = now_ny.replace(hour=16, minute=0, second=0, microsecond=0)
+    open_window_end = market_open + timedelta(minutes=5)
+    close_window_end = market_close + timedelta(minutes=5)
 
-    # رسالة إغلاق السوق الساعة 4:00 عصراً بتوقيت نيويورك
-    scheduler.add_job(job_market_close, CronTrigger(day_of_week="mon-fri", hour=16, minute=0))
-
-    # فحص الإشارات كل 5 دقائق (المهمة نفسها تتحقق من ساعات التداول)
-    scheduler.add_job(job_check_signals, "interval", minutes=5)
-
-    log.info("الجدولة جاهزة. البوت يعمل الآن بشكل مستمر (24 ساعة)...")
-    scheduler.start()
+    if market_open <= now_ny < open_window_end:
+        job_market_open()
+    elif market_close <= now_ny < close_window_end:
+        job_market_close()
+    elif market_open <= now_ny <= market_close:
+        job_check_signals()
+    else:
+        log.info("خارج ساعات التداول حالياً - لا يوجد إجراء.")
 
 
 if __name__ == "__main__":
