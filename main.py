@@ -1,22 +1,23 @@
 """
-بوت تحليل SPY - يرسل تنبيهات فنية عبر تيليجرام
-=================================================
+بوت تحليل عملة رقمية (كريبتو) - يرسل تنبيهات فنية عبر تيليجرام
+=================================================================
 تنويه مهم: هذا البوت يقدم إشارات فنية تعليمية مبنية على مؤشرات
 تحليل فني وباك-تيست تاريخي. هذا ليس نصيحة استثمارية أو مالية،
 والقرار والمسؤولية الكاملة على المستخدم.
 
+ملاحظة: الكريبتو يتداول 24/7 بدون إغلاق، لذا حذفنا منطق "ساعات السوق"
+واستبدلناه بفحص مستمر + ملخص يومي مرة كل 24 ساعة.
+
 المتطلبات (requirements.txt):
-    yfinance, pandas, numpy, requests, apscheduler, pytz
+    yfinance, pandas, numpy, requests, pytz
 """
 
 import os
-import time
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
-import pytz
 import requests
 import yfinance as yf
 
@@ -24,8 +25,8 @@ import yfinance as yf
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "PUT_YOUR_TOKEN_HERE")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "PUT_YOUR_CHAT_ID_HERE")
 
-SYMBOL = "SPY"
-NY_TZ = pytz.timezone("America/New_York")
+# رمز العملة بصيغة Yahoo Finance، مثال: BTC-USD، ETH-USD، SOL-USD
+SYMBOL = os.environ.get("CRYPTO_SYMBOL", "BTC-USD")
 
 # إعدادات الاستراتيجية
 EMA_FAST = 9
@@ -65,7 +66,7 @@ def send_telegram_message(text: str):
 
 # ============================ جلب البيانات ============================
 def get_intraday_data(period="5d", interval="5m") -> pd.DataFrame:
-    """يجلب بيانات شموع 5 دقائق لآخر 5 أيام تداول."""
+    """يجلب بيانات شموع 5 دقائق لآخر 5 أيام (الكريبتو يتداول 24/7 بدون توقف)."""
     df = yf.download(SYMBOL, period=period, interval=interval, progress=False, auto_adjust=True)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
@@ -224,9 +225,9 @@ def format_signal_message(signal: dict, backtest: dict) -> str:
     return (
         f"{emoji} <b>إشارة جديدة على {SYMBOL}</b>\n\n"
         f"النوع: <b>{label}</b>\n"
-        f"سعر الدخول: <b>${signal['price']}</b>\n"
-        f"🎯 الهدف: <b>${signal['target']}</b>\n"
-        f"🛑 وقف الخسارة: <b>${signal['stop_loss']}</b>\n\n"
+        f"سعر الدخول: <b>${signal['price']:,}</b>\n"
+        f"🎯 الهدف: <b>${signal['target']:,}</b>\n"
+        f"🛑 وقف الخسارة: <b>${signal['stop_loss']:,}</b>\n\n"
         f"📊 نسبة النجاح التاريخية للاستراتيجية (آخر {backtest['total_signals']} إشارة): "
         f"<b>{backtest['win_rate']}%</b>\n"
         f"(أرباح: {backtest['wins']} | خسائر: {backtest['losses']})"
@@ -234,7 +235,7 @@ def format_signal_message(signal: dict, backtest: dict) -> str:
     )
 
 
-def format_market_open_message(daily_df: pd.DataFrame) -> str:
+def format_daily_summary_message(daily_df: pd.DataFrame) -> str:
     prev_close = daily_df["Close"].iloc[-2]
     last_close = daily_df["Close"].iloc[-1]
     change_pct = (last_close - prev_close) / prev_close * 100
@@ -243,47 +244,25 @@ def format_market_open_message(daily_df: pd.DataFrame) -> str:
     trend = "صاعد 📈" if last_close > ema20 else "هابط 📉"
 
     return (
-        f"🔔 <b>افتتاح السوق - {SYMBOL}</b>\n"
-        f"📅 {datetime.now(NY_TZ).strftime('%Y-%m-%d')}\n\n"
-        f"آخر إغلاق: <b>${prev_close:.2f}</b>\n"
-        f"التغيّر: <b>{change_pct:+.2f}%</b>\n"
+        f"🔔 <b>ملخص يومي - {SYMBOL}</b>\n"
+        f"📅 {datetime.now(timezone.utc).strftime('%Y-%m-%d')} (UTC)\n\n"
+        f"السعر الحالي: <b>${last_close:,.2f}</b>\n"
+        f"التغيّر (24 ساعة): <b>{change_pct:+.2f}%</b>\n"
         f"الاتجاه العام (يومي): <b>{trend}</b>\n\n"
-        f"سيتم إرسال أي إشارة تداول جديدة فور تكوّنها خلال الجلسة."
-        f"{DISCLAIMER}"
-    )
-
-
-def format_market_close_message(daily_df: pd.DataFrame) -> str:
-    last_close = daily_df["Close"].iloc[-1]
-    prev_close = daily_df["Close"].iloc[-2]
-    change_pct = (last_close - prev_close) / prev_close * 100
-    return (
-        f"🔚 <b>إغلاق السوق - {SYMBOL}</b>\n"
-        f"سعر الإغلاق: <b>${last_close:.2f}</b>\n"
-        f"التغيّر اليومي: <b>{change_pct:+.2f}%</b>"
+        f"السوق شغال 24/7 — سيتم إرسال أي إشارة تداول جديدة فور تكوّنها."
         f"{DISCLAIMER}"
     )
 
 
 # ============================ المهام المجدولة ============================
-def job_market_open():
-    log.info("تنفيذ مهمة افتتاح السوق...")
+def job_daily_summary():
+    log.info("تنفيذ مهمة الملخص اليومي...")
     try:
         daily = get_daily_data()
-        msg = format_market_open_message(daily)
+        msg = format_daily_summary_message(daily)
         send_telegram_message(msg)
     except Exception as e:
-        log.error(f"خطأ في مهمة الافتتاح: {e}")
-
-
-def job_market_close():
-    log.info("تنفيذ مهمة إغلاق السوق...")
-    try:
-        daily = get_daily_data()
-        msg = format_market_close_message(daily)
-        send_telegram_message(msg)
-    except Exception as e:
-        log.error(f"خطأ في مهمة الإغلاق: {e}")
+        log.error(f"خطأ في مهمة الملخص اليومي: {e}")
 
 
 def job_check_signals():
@@ -310,29 +289,17 @@ def job_check_signals():
 def main():
     """
     هذا السكربت مصمم ليشتغل 'تشغيلة واحدة' في كل مرة (run once) — يناسب
-    GitHub Actions اللي يستدعيه كل 5 دقائق عبر cron بدل ما يفضل شغال باستمرار.
+    GitHub Actions اللي يستدعيه كل 5 دقائق عبر cron.
+    بما إن الكريبتو يتداول 24/7، البوت يفحص إشارات في كل تشغيلة،
+    ويرسل ملخص يومي واحد فقط عند الساعة 00:00 بتوقيت UTC.
     """
-    now_ny = datetime.now(NY_TZ)
-    log.info(f"وقت التشغيل الحالي بنيويورك: {now_ny}")
+    now_utc = datetime.now(timezone.utc)
+    log.info(f"وقت التشغيل الحالي (UTC): {now_utc}")
 
-    # عطلة نهاية الأسبوع: لا شي
-    if now_ny.weekday() >= 5:
-        log.info("عطلة نهاية الأسبوع - لا يوجد تداول.")
-        return
-
-    market_open = now_ny.replace(hour=9, minute=30, second=0, microsecond=0)
-    market_close = now_ny.replace(hour=16, minute=0, second=0, microsecond=0)
-    open_window_end = market_open + timedelta(minutes=5)
-    close_window_end = market_close + timedelta(minutes=5)
-
-    if market_open <= now_ny < open_window_end:
-        job_market_open()
-    elif market_close <= now_ny < close_window_end:
-        job_market_close()
-    elif market_open <= now_ny <= market_close:
-        job_check_signals()
+    if now_utc.hour == 0 and now_utc.minute < 5:
+        job_daily_summary()
     else:
-        log.info("خارج ساعات التداول حالياً - لا يوجد إجراء.")
+        job_check_signals()
 
 
 if __name__ == "__main__":
